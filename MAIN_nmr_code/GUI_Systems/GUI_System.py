@@ -1,6 +1,7 @@
 import tkinter as tk
 from tkinter import ttk
 from tkinter import filedialog
+from tkinter import scrolledtext
 import subprocess
 import re
 import os
@@ -18,6 +19,7 @@ class Appstate:
         self.config_FILE_PATH = "sys_configs/phenc_conf_halbach_v07test_240624_honey.py"
         self.cpmg_config_FILE_line_num = 54     # The location in cpmg scan file where the config file is imported
         self.diffusion_config_FILE_line_num = 54   # The location in diffusion scan file where the config file is imported
+        self.scan_process = None
     
     def get_config_FILE_PATH(self):
         return self.config_FILE_PATH
@@ -30,6 +32,22 @@ class Appstate:
     
     def update_run_FILE_PATH(self, new_path):
         self.run_FILE_PATH = new_path
+        
+    def set_scan_process(self, process):
+        self.scan_process = process
+
+    def stop_scan_process(self):
+        if self.scan_process and self.scan_process.poll() is None:
+            try:
+                proc = psutil.Process(self.scan_process.pid)
+                for child in proc.children(recursive=True):
+                    child.kill()
+                proc.kill()
+                print("Scan process terminated.")
+            except Exception as e:
+                print(f"Error stopping scan process: {e}")
+        else:
+            print("No running scan process.")
         
 # Defines a class of process that can know which process it is running, multiple instances of the class can be initiated to track different processes
 class ProcessState:
@@ -93,32 +111,105 @@ def select_directory(entry_var):
     if folder_selected:  # Only update if a folder was selected
         entry_var.set(folder_selected)
 
-def run_script(entry_var, image_frame, file_var):
-    '''Run the script to perform scan and then display the plots in the GUI.'''
+def check_process_finished(app_state, selected_folder, image_frame, root):
+    process = app_state.scan_process
+    if process.poll() is None:
+        # Process still running, check again after 500 ms
+        root.after(500, check_process_finished, app_state, selected_folder, image_frame, root)
+    else:
+        # Process finished
+        print("Process completed.")
+        load_plots(selected_folder, image_frame)
+
+# def run_script(app_state, entry_var, image_frame, file_var, root):
+#     '''Run the script to perform scan and then display the plots in the GUI.'''
+#     selected_folder = entry_var.get()
+#     # if selected_folder:
+#     #     selected_folder = selected_folder.replace("/", "\\")
+#     #     # test_process(selected_folder)
+#     #
+#     #     # When using os.system(), then the script will wait for the file to finish scanning
+#     #     exit_status = os.system(f'python {file_var.get()} "{selected_folder}"')  # Run script with selected directory
+#     #     # subprocess.Popen(["python", "NMR_CPMG.py", selected_folder], shell=True)  #make sure it is ran in the shell so we can use sys.argv to check the arguments
+#     #
+#     #     # Check if the exit status indicates an error (non-zero)
+#     #     if exit_status != 0:
+#     #         error_message = f"Error: The script '{file_var.get()}' failed to execute."
+#     #
+#     #         # Display the error message in Tkinter
+#     #         tk.messagebox.showerror("Execution Error", error_message)
+#     #
+#     #         # Stop further execution if there was an error
+#     #         return
+#     #
+#     #     # Run the script with the selected folder
+#     #     load_plots(selected_folder, image_frame)
+#     if selected_folder:
+#         selected_folder = selected_folder.replace("/", "\\")
+#         try:
+#             process = subprocess.Popen(["python", file_var.get(), selected_folder], shell=True)
+#             app_state.set_scan_process(process)
+#             # dynamically load the plots when the scan is running a 2D imaging scan 
+#             if file_var.get()=='nmr_2D.py':
+#                 root.after(5000)        # delay for 2 seconds so that the new folders are created 
+#                 load_latest_plot_while_running(app_state, image_frame, root, script_name=file_var.get())  
+#             else: 
+#                 root.after(500, check_process_finished, app_state, selected_folder, image_frame, root)  # run the script to load if not 
+#
+#         except Exception as e:
+#             tk.messagebox.showerror("Execution Error", f"Error: {e}")
+#     else:
+#         print("No folder selected")
+
+def run_script(app_state, entry_var, image_frame, file_var, root, console_output):
     selected_folder = entry_var.get()
     if selected_folder:
         selected_folder = selected_folder.replace("/", "\\")
-        # test_process(selected_folder)
-        
-        # When using os.system(), then the script will wait for the file to finish scanning
-        exit_status = os.system(f'python {file_var.get()} "{selected_folder}"')  # Run script with selected directory
-        # subprocess.Popen(["python", "NMR_CPMG.py", selected_folder], shell=True)  #make sure it is ran in the shell so we can use sys.argv to check the arguments
-        
-        # Check if the exit status indicates an error (non-zero)
-        if exit_status != 0:
-            error_message = f"Error: The script '{file_var.get()}' failed to execute."
-            
-            # Display the error message in Tkinter
-            tk.messagebox.showerror("Execution Error", error_message)
-            
-            # Stop further execution if there was an error
-            return
+        try:
+            console_output.config(state='normal')
+            console_output.delete('1.0', tk.END)
+            console_output.config(state='disabled')
+            # Start subprocess with stdout and stderr piped
+            process = subprocess.Popen(
+                ["python", file_var.get(), selected_folder],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,  # get text strings instead of bytes
+                shell=True
+            )
+            app_state.set_scan_process(process)
 
-        # Run the script with the selected folder
-        load_plots(selected_folder, image_frame)
+            # Start reading output asynchronously
+            def read_output():
+                for line in process.stdout:
+                    console_output.config(state='normal')
+                    console_output.insert(tk.END, line)
+                    console_output.see(tk.END)
+                    console_output.config(state='disabled')
+                for line in process.stderr:
+                    console_output.config(state='normal')
+                    console_output.insert(tk.END, line)
+                    console_output.see(tk.END)
+                    console_output.config(state='disabled')
+
+            import threading
+            threading.Thread(target=read_output, daemon=True).start()
+
+            # If your original code loads plots, keep that behavior here as needed
+            if file_var.get()=='nmr_2D.py':
+                root.after(5000)
+                load_latest_plot_while_running(app_state, image_frame, root, script_name=file_var.get())
+            else:
+                root.after(500, check_process_finished, app_state, selected_folder, image_frame, root)
+
+        except Exception as e:
+            tk.messagebox.showerror("Execution Error", f"Error: {e}")
     else:
         print("No folder selected")
 
+def stop_script(app_state):
+    app_state.stop_scan_process()
+    
 def get_latest_directory(parent_folder):
     """Find the most recently modified directory inside the parent folder."""
     # Find complete path to all the subdirectories inside the parent folder
@@ -169,17 +260,180 @@ def load_plots(parent_folder, image_frame):
     # create a new top-level window to display the images
     top = tk.Toplevel()
     top.title("NMR Scan Results")
+    #####################################
     # plot the images in 3 by 2 array in new window
+    # for i, image_file in enumerate(image_files):
+    #     image = Image.open(image_file)
+    #     image = image.resize((400, 300))  # Resize for display
+    #     photo = ImageTk.PhotoImage(image)
+    #     label = tk.Label(top, image=photo)
+    #     label.image = photo
+    #     label.grid(row=i//3, column=i%3)
+    #
+    # return images
+    #########################################
+    # make image resizable based on the window
+    # Frame to hold all image labels
+    top.geometry("1200x800")  # Set a good initial size
+
+    container = tk.Frame(top)
+    container.pack(fill="both", expand=True)
+
+    original_images = []
+    image_labels = []
+    frames = []
+
+    rows = (len(image_files) + 2) // 3
     for i, image_file in enumerate(image_files):
         image = Image.open(image_file)
-        image = image.resize((400, 300))  # Resize for display
-        photo = ImageTk.PhotoImage(image)
-        label = tk.Label(top, image=photo)
-        label.image = photo
-        label.grid(row=i//3, column=i%3)
+        original_images.append(image)
 
-    return images
+        frame = tk.Frame(container, bg="black", bd=1, relief="solid")
+        frame.grid(row=i // 3, column=i % 3, sticky="nsew", padx=5, pady=5)
+        frames.append(frame)
 
+        container.grid_rowconfigure(i // 3, weight=1)
+        container.grid_columnconfigure(i % 3, weight=1)
+
+        label = tk.Label(frame)
+        label.pack(fill="both", expand=True)
+        image_labels.append(label)
+
+    resize_job = [None]
+
+    def resize_images(event=None):
+        if resize_job[0]:
+            top.after_cancel(resize_job[0])
+
+        def do_resize():
+            for i, frame in enumerate(frames):
+                if i >= len(original_images):
+                    continue
+                w = frame.winfo_width()
+                h = frame.winfo_height()
+                if w > 10 and h > 10:
+                    resized = original_images[i].resize((w, h), Image.Resampling.LANCZOS)
+                    img_tk = ImageTk.PhotoImage(resized)
+                    image_labels[i].config(image=img_tk)
+                    image_labels[i].image = img_tk  # Prevent GC
+
+        resize_job[0] = top.after(50, do_resize)
+
+    top.bind("<Configure>", resize_images)
+
+    return image_labels
+
+# def load_latest_plot_while_running(app_state, image_frame, root, script_name="Monitor_Noise.py"):
+#     '''used for the code that continuously run, like NMR 2D'''
+#     process = app_state.scan_process
+#     if process is None or process.poll() is not None:
+#         print("Process finished or not running.")
+#         return  # Stop updating
+#
+#     latest_dir = get_latest_directory("D:/NMR_DATA")  # Or another parent folder
+#     if not latest_dir:
+#         print("No directories yet")
+#         root.after(1000, load_latest_plot_while_running, app_state, image_frame, root, script_name)
+#         return
+#
+#     image_files = sorted(glob.glob(os.path.join(latest_dir, "*.png")), key=os.path.getmtime)
+#     if not image_files:
+#         print("No image found yet")
+#         root.after(1000, load_latest_plot_while_running, app_state, image_frame, root, script_name)
+#         return
+#
+#     latest_image = image_files[-1]  # Only the latest one
+#
+#     # Clear previous image
+#     for widget in image_frame.winfo_children():
+#         widget.destroy()
+#
+#     try:
+#         image = Image.open(latest_image)
+#         # image = image.resize((400, 300))
+#         photo = ImageTk.PhotoImage(image)
+#
+#         label = tk.Label(image_frame, image=photo)
+#         label.image = photo
+#         label.pack()
+#     except Exception as e:
+#         print(f"Error loading image: {e}")
+#
+#     # Call again after 1s if still running
+#     root.after(1000, load_latest_plot_while_running, app_state, image_frame, root, script_name)
+
+def load_latest_plot_while_running(app_state, image_frame, root, script_name="Monitor_Noise.py"):
+    process = app_state.scan_process
+    if process is None or process.poll() is not None:
+        print("Process finished or not running.")
+        return
+
+    latest_dir = get_latest_directory("D:/NMR_DATA")
+    if not latest_dir:
+        root.after(1000, load_latest_plot_while_running, app_state, image_frame, root, script_name)
+        return
+
+    image_files = sorted(glob.glob(os.path.join(latest_dir, "*.png")), key=os.path.getmtime)
+    if not image_files:
+        root.after(1000, load_latest_plot_while_running, app_state, image_frame, root, script_name)
+        return
+
+    latest_image_path = image_files[-1]
+
+    # Clear previous widgets
+    for widget in image_frame.winfo_children():
+        widget.destroy()
+
+    try:
+        original_image = Image.open(latest_image_path)
+
+        # Create a Canvas to allow flexible resizing
+        C_width = image_frame.winfo_width()
+        C_height = image_frame.winfo_height()
+        canvas = tk.Canvas(image_frame, bg="black", width = 1000, height = 500)
+        canvas.pack(fill="both", expand=True)
+        
+        # MAX_WIDTH = 2000
+        # MAX_HEIGHT = 1600
+        # def update_resized_image(event=None):
+        #     canvas_width = min(canvas.winfo_width(), MAX_WIDTH)
+        #     canvas_height = min(canvas.winfo_height(), MAX_HEIGHT)
+        #
+        #     if canvas_width > 1 and canvas_height > 1:
+        #         # Preserve aspect ratio
+        #         aspect = original_image.width / original_image.height
+        #         if canvas_width / canvas_height > aspect:
+        #             canvas_width = int(canvas_height * aspect)
+        #         else:
+        #             canvas_height = int(canvas_width / aspect)
+        #
+        #         resized_image = original_image.resize((canvas_width, canvas_height), Image.Resampling.LANCZOS)
+        #         photo = ImageTk.PhotoImage(resized_image)
+        #
+        #         canvas.image = photo
+        #         canvas.delete("all")
+        #         canvas.create_image(canvas.winfo_width() // 2, canvas.winfo_height() // 2, anchor="center", image=photo)
+        def update_resized_image(event=None):
+            canvas_width = canvas.winfo_width()
+            canvas_height = canvas.winfo_height()
+        
+            if canvas_width > 1 and canvas_height > 1:
+                # Resize image to fit the canvas
+                resized_image = original_image.resize((canvas_width, canvas_height), Image.Resampling.LANCZOS)
+                photo = ImageTk.PhotoImage(resized_image)
+        
+                canvas.image = photo  # Keep reference
+                canvas.delete("all")  # Clear previous
+                canvas.create_image(canvas_width // 2, canvas_height // 2, anchor="center", image=photo)
+
+        # Bind canvas resizing
+        canvas.bind("<Configure>", update_resized_image)
+
+    except Exception as e:
+        print(f"Error loading image: {e}")
+
+    root.after(1000, load_latest_plot_while_running, app_state, image_frame, root, script_name)
+    
 def update_selected_file(file_var):
     """Displays the selected Python file when ComboBox value changes."""
     selected_file = file_var.get()
@@ -233,6 +487,8 @@ def main():
     image_frame = tk.Frame(root)  # Frame for displaying images
     image_frame.pack(pady=20)
     
+
+    
     ########## Monitor noise script currently doesn't work on the newest system
     # # Create button that monitors noise and stops monitoring noise
     # monitor_noise_process = ProcessState("Monitor_Noise.py")            # Initialize Monitor_Noise class to track the python file processes
@@ -259,8 +515,21 @@ def main():
     open_param_button = tk.Button(frame_scan, text="Edit Scan Parameters", command=lambda: open_parameter_popup(root, "sys_configs/"+str(file_var.get())))
     open_param_button.grid(row=2, column=2, padx=10, pady=10)
 
-    run_button = tk.Button(frame_scan, text="Run Script", command=lambda: run_script(entry_var, image_frame, file_var))
+    # run_button = tk.Button(frame_scan, text="Run Scan", command=lambda: run_script(app_state, entry_var, image_frame, file_var, root))
+    # run_button.grid(row=3, column=1, pady=20)
+    run_button = tk.Button(frame_scan, text="Run Scan", command=lambda: run_script(app_state, entry_var, image_frame, file_var, root, console_output))
     run_button.grid(row=3, column=1, pady=20)
+    
+    
+    stop_button = tk.Button(frame_scan, text="Stop Scan", command=lambda: stop_script(app_state))
+    stop_button.grid(row=3, column=2, padx=10, pady=20)
+    
+    # Frame for console output
+    console_frame = tk.Frame(root)
+    console_frame.pack(pady=10, fill="both", expand=True)
+    
+    console_output = scrolledtext.ScrolledText(console_frame, height=10, state='disabled')
+    console_output.pack(fill="both", expand=True)
 
 
     # Create a label widget
