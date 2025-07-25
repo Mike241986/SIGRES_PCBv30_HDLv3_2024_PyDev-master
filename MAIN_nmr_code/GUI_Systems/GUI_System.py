@@ -118,48 +118,16 @@ def check_process_finished(app_state, selected_folder, image_frame, root):
         root.after(500, check_process_finished, app_state, selected_folder, image_frame, root)
     else:
         # Process finished
-        print("Process completed.")
-        load_plots(selected_folder, image_frame)
-
-# def run_script(app_state, entry_var, image_frame, file_var, root):
-#     '''Run the script to perform scan and then display the plots in the GUI.'''
-#     selected_folder = entry_var.get()
-#     # if selected_folder:
-#     #     selected_folder = selected_folder.replace("/", "\\")
-#     #     # test_process(selected_folder)
-#     #
-#     #     # When using os.system(), then the script will wait for the file to finish scanning
-#     #     exit_status = os.system(f'python {file_var.get()} "{selected_folder}"')  # Run script with selected directory
-#     #     # subprocess.Popen(["python", "NMR_CPMG.py", selected_folder], shell=True)  #make sure it is ran in the shell so we can use sys.argv to check the arguments
-#     #
-#     #     # Check if the exit status indicates an error (non-zero)
-#     #     if exit_status != 0:
-#     #         error_message = f"Error: The script '{file_var.get()}' failed to execute."
-#     #
-#     #         # Display the error message in Tkinter
-#     #         tk.messagebox.showerror("Execution Error", error_message)
-#     #
-#     #         # Stop further execution if there was an error
-#     #         return
-#     #
-#     #     # Run the script with the selected folder
-#     #     load_plots(selected_folder, image_frame)
-#     if selected_folder:
-#         selected_folder = selected_folder.replace("/", "\\")
-#         try:
-#             process = subprocess.Popen(["python", file_var.get(), selected_folder], shell=True)
-#             app_state.set_scan_process(process)
-#             # dynamically load the plots when the scan is running a 2D imaging scan 
-#             if file_var.get()=='nmr_2D.py':
-#                 root.after(5000)        # delay for 2 seconds so that the new folders are created 
-#                 load_latest_plot_while_running(app_state, image_frame, root, script_name=file_var.get())  
-#             else: 
-#                 root.after(500, check_process_finished, app_state, selected_folder, image_frame, root)  # run the script to load if not 
-#
-#         except Exception as e:
-#             tk.messagebox.showerror("Execution Error", f"Error: {e}")
-#     else:
-#         print("No folder selected")
+        stdout, stderr = process.communicate()
+        if process.returncode != 0:
+            # There was an error
+            error_msg = stderr.decode('utf-8') if stderr else "Unknown error occurred."
+            print("Error:", error_msg)
+            tk.messagebox.showerror("Process Error", f"The process failed with the following error:\n\n{error_msg}")
+        else:
+            print("Process completed.")
+            load_plots(selected_folder, image_frame)
+            
 
 def run_script(app_state, entry_var, image_frame, file_var, root, console_output):
     selected_folder = entry_var.get()
@@ -323,51 +291,26 @@ def load_plots(parent_folder, image_frame):
 
     return image_labels
 
-# def load_latest_plot_while_running(app_state, image_frame, root, script_name="Monitor_Noise.py"):
-#     '''used for the code that continuously run, like NMR 2D'''
-#     process = app_state.scan_process
-#     if process is None or process.poll() is not None:
-#         print("Process finished or not running.")
-#         return  # Stop updating
-#
-#     latest_dir = get_latest_directory("D:/NMR_DATA")  # Or another parent folder
-#     if not latest_dir:
-#         print("No directories yet")
-#         root.after(1000, load_latest_plot_while_running, app_state, image_frame, root, script_name)
-#         return
-#
-#     image_files = sorted(glob.glob(os.path.join(latest_dir, "*.png")), key=os.path.getmtime)
-#     if not image_files:
-#         print("No image found yet")
-#         root.after(1000, load_latest_plot_while_running, app_state, image_frame, root, script_name)
-#         return
-#
-#     latest_image = image_files[-1]  # Only the latest one
-#
-#     # Clear previous image
-#     for widget in image_frame.winfo_children():
-#         widget.destroy()
-#
-#     try:
-#         image = Image.open(latest_image)
-#         # image = image.resize((400, 300))
-#         photo = ImageTk.PhotoImage(image)
-#
-#         label = tk.Label(image_frame, image=photo)
-#         label.image = photo
-#         label.pack()
-#     except Exception as e:
-#         print(f"Error loading image: {e}")
-#
-#     # Call again after 1s if still running
-#     root.after(1000, load_latest_plot_while_running, app_state, image_frame, root, script_name)
-
 def load_latest_plot_while_running(app_state, image_frame, root, script_name="Monitor_Noise.py"):
     process = app_state.scan_process
-    if process is None or process.poll() is not None:
-        print("Process finished or not running.")
+
+    if process is None:
+        print("No process running.")
         return
 
+    if process.poll() is not None:
+        # Process finished
+        if process.returncode != 0:
+            # Error occurred
+            stdout, stderr = process.communicate()
+            error_msg = stderr.decode("utf-8") if stderr else "Unknown error occurred."
+            print("Error from process:", error_msg)
+            tk.messagebox.showerror("Process Error", f"The process failed with the following error:\n\n{error_msg}")
+        else:
+            print("Process finished normally.")
+        return  # Stop re-calling itself
+
+    # Process is still running; try to load latest plot
     latest_dir = get_latest_directory("D:/NMR_DATA")
     if not latest_dir:
         root.after(1000, load_latest_plot_while_running, app_state, image_frame, root, script_name)
@@ -390,38 +333,17 @@ def load_latest_plot_while_running(app_state, image_frame, root, script_name="Mo
         # Create a Canvas to allow flexible resizing
         C_width = image_frame.winfo_width()
         C_height = image_frame.winfo_height()
-        canvas = tk.Canvas(image_frame, bg="black", width = 1000, height = 500)
+        canvas = tk.Canvas(image_frame, bg="black", width=1000, height=500)
         canvas.pack(fill="both", expand=True)
-        
-        # MAX_WIDTH = 2000
-        # MAX_HEIGHT = 1600
-        # def update_resized_image(event=None):
-        #     canvas_width = min(canvas.winfo_width(), MAX_WIDTH)
-        #     canvas_height = min(canvas.winfo_height(), MAX_HEIGHT)
-        #
-        #     if canvas_width > 1 and canvas_height > 1:
-        #         # Preserve aspect ratio
-        #         aspect = original_image.width / original_image.height
-        #         if canvas_width / canvas_height > aspect:
-        #             canvas_width = int(canvas_height * aspect)
-        #         else:
-        #             canvas_height = int(canvas_width / aspect)
-        #
-        #         resized_image = original_image.resize((canvas_width, canvas_height), Image.Resampling.LANCZOS)
-        #         photo = ImageTk.PhotoImage(resized_image)
-        #
-        #         canvas.image = photo
-        #         canvas.delete("all")
-        #         canvas.create_image(canvas.winfo_width() // 2, canvas.winfo_height() // 2, anchor="center", image=photo)
+
         def update_resized_image(event=None):
             canvas_width = canvas.winfo_width()
             canvas_height = canvas.winfo_height()
-        
+
             if canvas_width > 1 and canvas_height > 1:
-                # Resize image to fit the canvas
                 resized_image = original_image.resize((canvas_width, canvas_height), Image.Resampling.LANCZOS)
                 photo = ImageTk.PhotoImage(resized_image)
-        
+
                 canvas.image = photo  # Keep reference
                 canvas.delete("all")  # Clear previous
                 canvas.create_image(canvas_width // 2, canvas_height // 2, anchor="center", image=photo)
@@ -432,6 +354,7 @@ def load_latest_plot_while_running(app_state, image_frame, root, script_name="Mo
     except Exception as e:
         print(f"Error loading image: {e}")
 
+    # Schedule next check
     root.after(1000, load_latest_plot_while_running, app_state, image_frame, root, script_name)
     
 def update_selected_file(file_var):

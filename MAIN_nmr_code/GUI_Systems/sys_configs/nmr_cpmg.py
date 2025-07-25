@@ -11,8 +11,8 @@ class scan_config():
     
     
     # cpmg settings
-    B1_freq = 8.94 #9.023 # 4.355 # 4.158 # 4.164 # in MHz
-    offset = 30 
+    B1_freq = 8.97 #9.023 # 4.355 # 4.158 # 4.164 # in MHz
+    offset = 20 
     cpmg_freq = B1_freq + offset*1e-3
     bstrap_pchg_us = 2000
     lcs_pchg_us = 20
